@@ -1,16 +1,16 @@
 import socket
 import os
-import struct
+import struct # распаковка и запаковка данных (формирует заголовки)
 import time
-import select
-import sys
+import select # ожидание ответа
+import sys # для параметров запуска
 
 if len(sys.argv) < 2:
     print("Использование: sudo python traceroute.py <IP-адрес или имя узла> [--resolve]")
     sys.exit(1)
 
-ICMP_ECHO_REQUEST = 8
-ICMP_PROTO = socket.getprotobyname('icmp')
+ICMP_ECHO_REQUEST = 8 # запрос эхо
+ICMP_PROTO = socket.getprotobyname('icmp') # получение числа значения протокола
 
 
 def calculate_checksum(data):
@@ -46,14 +46,16 @@ def build_packet(seq_number):
     header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, 0, pid, seq_number)
     data = struct.pack("d", time.time())
     packet = header + data
-    chksum = calculate_checksum(packet)
+    chksum = calculate_checksum(packet) # контрольная сумма
     header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, socket.htons(chksum), pid, seq_number)
+    # 8 битное целое число со знаком(b) представлет собой 16 битовое целое число без знака (H) 16 битное целое число со знаком
+    # id процесса и номер
     return header + data
 
 
 def send_icmp(sock, dest_ip, seq_number, ttl):
     """
-    Отправляет ICMP-пакет с заданным TTL.
+    Отправляет ICMP-пакет с заданным TTL. Ограничивает макс число хоров
     """
     sock.setsockopt(socket.SOL_IP, socket.IP_TTL, ttl)
     packet = build_packet(seq_number)
@@ -95,7 +97,7 @@ def traceroute(dest_addr, max_hops=30, timeout=2, probes=3, resolve_dns=False):
     Если resolve_dns True, дополнительно производится обратное разрешение IP в имя хоста.
     """
     try:
-        dest_ip = socket.gethostbyname(dest_addr)
+        dest_ip = socket.gethostbyname(dest_addr) # преобразует доменное имя в ип
     except socket.gaierror:
         print(f"Не удается разрешить адрес {dest_addr}")
         sys.exit(1)
@@ -103,9 +105,10 @@ def traceroute(dest_addr, max_hops=30, timeout=2, probes=3, resolve_dns=False):
     print(f"Трассировка до {dest_addr} ({dest_ip}) с максимальным количеством хопсов {max_hops}:")
 
     for ttl in range(1, max_hops + 1):
-        print(f"{ttl:2}  ", end="")
+        print(f"{ttl:2}  ", end="") # перебирает ttl от 1 до макс хопов
         for probe in range(probes):
-            sock = None  # Инициализируем переменную
+            # для каждого ttl отправляет 3 icmp пакета
+            sock = None
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, ICMP_PROTO)
                 sock.settimeout(timeout)
