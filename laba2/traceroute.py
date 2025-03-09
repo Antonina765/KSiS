@@ -1,148 +1,224 @@
-import socket
 import os
-import struct # распаковка и запаковка данных (формирует заголовки)
+import sys
+import socket
+import struct
 import time
-import select # ожидание ответа
-import sys # для параметров запуска
-
-if len(sys.argv) < 2:
-    print("Использование: sudo python traceroute.py <IP-адрес или имя узла> [--resolve]")
-    sys.exit(1)
-
-ICMP_ECHO_REQUEST = 8 # запрос эхо
-ICMP_PROTO = socket.getprotobyname('icmp') # получение числа значения протокола
+import select
+import ipaddress
 
 
-def calculate_checksum(data):
+class NetHelper:
     """
-    Вычисляет контрольную сумму для ICMP-пакета.
+    Вспомогательный класс для работы с IP-адресами и DNS.
+    Содержит методы для проверки корректности IP-адреса и обратного разрешения DNS.
     """
-    checksum_val = 0
-    count = 0
-    count_to = (len(data) // 2) * 2
-    while count < count_to:
-        # Собираем 16-битное число из двух последовательных байтов.
-        this_val = data[count + 1] * 256 + data[count]
-        checksum_val += this_val
-        checksum_val &= 0xffffffff  # Ограничение до 32 бит
-        count += 2
-    if count_to < len(data):
-        checksum_val += data[-1]
-        checksum_val &= 0xffffffff
 
-    checksum_val = (checksum_val >> 16) + (checksum_val & 0xffff)
-    checksum_val += (checksum_val >> 16)
-    answer = ~checksum_val & 0xffff
-    # Перестановка байтов для сетевого порядка (big-endian)
-    answer = (answer >> 8) | ((answer & 0xff) << 8)
-    return answer
+    @staticmethod
+    def is_ip_valid(addr: str) -> bool:
+        """
+        Проверяет, является ли строка корректным IP-адресом.
 
+        :param addr: строка с IP-адресом
+        :return: True, если адрес корректен, иначе False
+        """
+        try:
+            ipaddress.ip_address(addr)
+            return True
+        except ValueError:
+            return False
 
-def build_packet(seq_number):
-    """
-    Создает ICMP эхо-запрос (ping) пакет с заданным sequence number.
-    """
-    pid = os.getpid() & 0xFFFF
-    header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, 0, pid, seq_number)
-    data = struct.pack("d", time.time())
-    packet = header + data
-    chksum = calculate_checksum(packet) # контрольная сумма
-    header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, socket.htons(chksum), pid, seq_number)
-    # 8 битное целое число со знаком(b) представлет собой 16 битовое целое число без знака (H) 16 битное целое число со знаком
-    # id процесса и номер
-    return header + data
+    @staticmethod
+    def reverse_dns(ip: str) -> str:
+        """
+        Выполняет обратное разрешение DNS: получает доменное имя по IP-адресу.
+
+        :param ip: IP-адрес в виде строки
+        :return: доменное имя или сообщение об ошибке
+        """
+        try:
+            return socket.gethostbyaddr(ip)[0]
+        except socket.herror:
+            return "DNS имя не найдено"
 
 
-def send_icmp(sock, dest_ip, seq_number, ttl):
+class ICMPHandler:
     """
-    Отправляет ICMP-пакет с заданным TTL. Ограничивает макс число хоров
+    Класс для формирования ICMP-пакетов.
+    Реализует вычисление контрольной суммы и сборку пакета для echo-запроса.
     """
-    sock.setsockopt(socket.SOL_IP, socket.IP_TTL, ttl)
-    packet = build_packet(seq_number)
-    sock.sendto(packet, (dest_ip, 1))
+    ECHO_REQ = 8  # Тип ICMP для echo-запроса
+
+    @staticmethod
+    def calc_checksum(data: bytes) -> int:
+        """
+        Вычисляет 16-битную контрольную сумму для набора байтов.
+
+        :param data: входные данные (байты)
+        :return: рассчитанная контрольная сумма
+        """
+        total = 0
+        n = len(data)
+
+        # Обрабатываем данные парами байтов
+        for i in range(0, n - 1, 2):
+            word = (data[i + 1] << 8) + data[i]
+            total += word
+            total &= 0xffffffff  # Ограничиваем сумму 32 битами
+
+        # Если число байтов нечётное, добавляем последний байт
+        if n % 2:
+            total += data[-1]
+            total &= 0xffffffff
+
+        total = (total >> 16) + (total & 0xFFFF)
+        total += (total >> 16)
+        checksum = ~total & 0xFFFF
+        # Приводим к сетевому порядку байтов (big-endian)
+        return (checksum >> 8) | ((checksum & 0xFF) << 8)
+
+    @staticmethod
+    def build_echo_packet(ident: int, seq: int) -> bytes:
+        """
+        Собирает ICMP echo request пакет с заданными идентификатором и номером последовательности.
+
+        :param ident: идентификатор (обычно PID процесса)
+        :param seq: номер последовательности
+        :return: готовый пакет в виде байтов
+        """
+        # Формат "bbHHh":
+        #   b  - 1 байт: тип (ECHO_REQ)
+        #   b  - 1 байт: код (0)
+        #   H  - 2 байта: контрольная сумма (пока 0)
+        #   H  - 2 байта: идентификатор пакета
+        #   h  - 2 байта: номер последовательности
+        header = struct.pack("bbHHh", ICMPHandler.ECHO_REQ, 0, 0, ident, seq)
+        payload = b'bsuirbsuirbsuirbsuirbsuirbsuirpi'
+        # Вычисляем контрольную сумму для полного пакета (заголовок+данные)
+        chksum = ICMPHandler.calc_checksum(header + payload)
+        header = struct.pack("bbHHh", ICMPHandler.ECHO_REQ, 0, socket.htons(chksum), ident, seq)
+        return header + payload
 
 
-def receive_icmp(sock, timeout):
+class RouteTracer:
     """
-    Ожидает ICMP-ответ в течение timeout секунд.
-    Возвращает кортеж (задержка, адрес отправителя) или (None, None), если таймаут.
+    Класс для выполнения трассировки маршрута с ICMP запросами.
+    Отправляет пакеты с увеличивающимся TTL, чтобы определить цепочку маршрутизаторов к цели.
     """
-    time_left = timeout
-    while time_left > 0:
-        start_select = time.time()
-        ready = select.select([sock], [], [], time_left)
-        time_spent = time.time() - start_select
-        if not ready[0]:
+
+    def __init__(self, target_ip: str, max_steps: int = 30, pph: int = 3, time_out: int = 2):
+        """
+        Инициализирует параметры трассировки.
+
+        :param target_ip: Целевой IP-адрес (в виде строки)
+        :param max_steps: Максимальное количество хопов
+        :param pph: Количество пакетов, отправляемых на каждом хопе (packets per hop)
+        :param time_out: Тайм-аут ожидания ответа в секундах
+        """
+        self.target_ip = target_ip
+        self.max_steps = max_steps
+        self.pph = pph
+        self.time_out = time_out
+        self.ident = os.getpid() & 0xFFFF  # Используем PID процесса для идентификации
+
+    def send_request(self, ttl_value: int) -> (str, float):
+        """
+        Отправляет один ICMP echo запрос с заданным TTL.
+
+        :param ttl_value: Значение TTL для пакета
+        :return: Кортеж (IP-адрес отправителя, round-trip time в мс) или (None, None) при ошибке
+        """
+        try:
+            # Создаем raw-сокет для отправки ICMP-пакета
+            s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+            s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, ttl_value)
+            s.settimeout(self.time_out)
+        except socket.error as err:
+            print("Ошибка создания сокета:", err)
             return None, None
 
-        time_received = time.time()
-        rec_packet, addr = sock.recvfrom(1024)
-        # Предположим, что IPv4-заголовок занимает 20 байт (без опций)
-        icmp_header = rec_packet[20:28]
-        icmp_type, code, recv_checksum, p_id, seq = struct.unpack("bbHHh", icmp_header)
+        packet = ICMPHandler.build_echo_packet(self.ident, 1)
 
-        # Принимаем echo reply (тип 0) и сообщение "TTL exceeded" (тип 11)
-        if icmp_type in (0, 11):
-            return time_received - start_select, addr[0]
+        try:
+            s.sendto(packet, (self.target_ip, 0))
+            send_time = time.time()
+        except socket.error as err:
+            print("Ошибка отправки пакета:", err)
+            s.close()
+            return None, None
 
-        time_left -= time_spent
-
-    return None, None
-
-
-def traceroute(dest_addr, max_hops=30, timeout=2, probes=3, resolve_dns=False):
-    """
-    Проводит трассировку маршрута до целевого узла.
-    dest_addr может быть задан как IP-адрес или доменное имя.
-    Если resolve_dns True, дополнительно производится обратное разрешение IP в имя хоста.
-    """
-    try:
-        dest_ip = socket.gethostbyname(dest_addr) # преобразует доменное имя в ип
-    except socket.gaierror:
-        print(f"Не удается разрешить адрес {dest_addr}")
-        sys.exit(1)
-
-    print(f"Трассировка до {dest_addr} ({dest_ip}) с максимальным количеством хопсов {max_hops}:")
-
-    for ttl in range(1, max_hops + 1):
-        print(f"{ttl:2}  ", end="") # перебирает ttl от 1 до макс хопов
-        for probe in range(probes):
-            # для каждого ttl отправляет 3 icmp пакета
-            sock = None
+        while True:
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, ICMP_PROTO)
-                sock.settimeout(timeout)
-                send_icmp(sock, dest_ip, ttl, ttl)  # Используем ttl в качестве sequence number
-                delay, current_addr = receive_icmp(sock, timeout)
-            except socket.error as e:
-                print(f"\nОшибка при отправке пакета: {e}")
-                sys.exit(1)
-            finally:
-                if sock is not None:
-                    sock.close()
-            if delay is None:
-                print("* ", end="")
-            else:
-                if resolve_dns:
-                    try:
-                        host_name = socket.gethostbyaddr(current_addr)[0]
-                    except socket.herror:
-                        host_name = current_addr
-                    print(f"{host_name} ({current_addr}) {delay * 1000:.2f} ms ", end="")
+                ready = select.select([s], [], [], self.time_out)
+                if not ready[0]:
+                    print("Таймаут ожидания ответа")
+                    s.close()
+                    return None, None
+
+                recv_data, addr = s.recvfrom(1024)
+                recv_time = time.time()
+                # Предполагаем, что заголовок IPv4 занимает 20 байт, затем следует ICMP-заголовок
+                icmp_segment = recv_data[20:28]
+                icmp_type, code, chk, rcv_ident, seq = struct.unpack("bbHHh", icmp_segment)
+                # Если получен Echo Reply (тип 0) и идентификатор совпадает
+                if icmp_type == 0 and rcv_ident == self.ident:
+                    s.close()
+                    return addr[0], (recv_time - send_time) * 1000
+                # Если получено сообщение о превышении времени (Time Exceeded, тип 11)
+                elif icmp_type == 11 and code == 0:
+                    s.close()
+                    return addr[0], (recv_time - send_time) * 1000
+            except socket.error as exc:
+                print("Ошибка при получении ответа:", exc)
+                s.close()
+                return None, None
+
+    def start_tracing(self, use_dns: bool = False):
+        """
+        Запускает процесс трассировки маршрута до целевого узла.
+        :param use_dns: Если True, выполняется обратное разрешение DNS для каждого хопа.
+        """
+        if use_dns:
+            print(f"Traceroute до {self.target_ip} с DNS разрешением (макс. {self.max_steps} хопов):")
+        else:
+            print(f"Traceroute до {self.target_ip} (макс. {self.max_steps} хопов):")
+
+        for ttl in range(1, self.max_steps + 1):
+            results = []
+            for _ in range(self.pph):
+                ip_resp, rtt = self.send_request(ttl)
+                if ip_resp:
+                    results.append((ip_resp, rtt))
+            if results:
+                avg_rtt = sum(delay for _, delay in results) / len(results)
+                if use_dns:
+                    dns_label = NetHelper.reverse_dns(results[0][0])
+                    print(f"{ttl}\t{results[0][0]}\t{dns_label}\t{avg_rtt:.2f} ms")
                 else:
-                    print(f"{current_addr} {delay * 1000:.2f} ms ", end="")
-                if current_addr == dest_ip:
-                    print("\nТрассировка завершена.")
-                    return
-        print()
-    print("Трассировка завершена.")
+                    print(f"{ttl}\t{results[0][0]}\t{avg_rtt:.2f} ms")
+                if results[0][0] == self.target_ip:
+                    print("Целевой узел достигнут.")
+                    break
+            else:
+                print(f"{ttl}\t*\t*")
 
 
 def main():
-    target = sys.argv[1]
-    # Если передан параметр --resolve, разрешаем имена узлов
-    resolve_flag = "--resolve" in sys.argv
-    traceroute(target, resolve_dns=resolve_flag)
+    """
+    Основная функция, запрашивающая у пользователя целевой IP или доменное имя,
+    а затем запускающая трассировку маршрута.
+    """
+    target_input = input("Введите IP или доменное имя: ").strip()
+    if NetHelper.is_ip_valid(target_input):
+        tracer = RouteTracer(target_input)
+        tracer.start_tracing(use_dns=False)
+    else:
+        try:
+            ip_addr = socket.gethostbyname(target_input)
+            print(f"IP адрес {target_input}: {ip_addr}")
+            tracer = RouteTracer(ip_addr)
+            tracer.start_tracing(use_dns=True)
+        except socket.gaierror:
+            print("Ошибка разрешения доменного имени.")
 
 
 if __name__ == "__main__":
