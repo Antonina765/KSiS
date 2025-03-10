@@ -1,10 +1,10 @@
 import os
-import sys
-import socket
-import struct
+import sys # для работы с аргументами командой строки
+import socket # для создания и управления сокетами, позволяет отправлять и получать пакеты
+import struct # используется для упаковки и распаковки данных в пакетах
 import time
-import select
-import ipaddress
+import select # для ожидания ответа от сокета, обрабатывать ответы icmp
+import ipaddress # для проверки корректности ip адреса
 
 
 class NetHelper:
@@ -232,10 +232,4 @@ def main():
 
 
 if __name__ == "__main__":
-    """
-    Для корректной работы raw-сокетов на macOS обязательно запускайте этот скрипт с повышенными привилегиями,
-    например, с помощью команды:
-
-      sudo python3 traceroute.py
-    """
     main()
