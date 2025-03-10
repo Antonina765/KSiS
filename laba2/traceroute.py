@@ -115,14 +115,14 @@ class RouteTracer:
         self.probes_per_hop = probes_per_hop
         self.timeout = timeout
         self.ident = os.getpid() & 0xFFFF  # Идентификатор пакета (PID процесса)
-        self.seq = 0  # Инициализация sequence number, который будет обновляться при каждой отправке
+        self.seq = 0  # Значение sequence number будет увеличено один раз на TTL
 
-    def send_request(self, ttl: int) -> (str, float):
+    def send_request(self, ttl: int, seq: int) -> (str, float):
         """
-        Отправляет один ICMP echo запрос с заданным TTL.
-        Перед отправкой увеличивает значение sequence number.
+        Отправляет один ICMP echo запрос с заданным TTL, используя переданный sequence number.
 
         :param ttl: Значение TTL для пакета.
+        :param seq: Используемый номер последовательности.
         :return: Кортеж (IP-адрес, время round-trip в мс) или (None, None) при ошибке.
         """
         try:
@@ -134,9 +134,7 @@ class RouteTracer:
             print("Ошибка создания сокета:", err)
             return None, None
 
-        # Обновляем sequence number для каждого нового запроса.
-        self.seq += 1
-        packet = ICMPHandler.build_echo_packet(self.ident, self.seq)
+        packet = ICMPHandler.build_echo_packet(self.ident, seq)
         try:
             sock.sendto(packet, (self.target_ip, 0))
             send_time = time.time()
@@ -156,7 +154,7 @@ class RouteTracer:
                 recv_time = time.time()
                 # Пропускаем IPv4-заголовок (20 байт), затем ICMP-заголовок.
                 icmp_data = recv_data[20:28]
-                icmp_type, code, chk, rcv_ident, seq = struct.unpack("bbHHh", icmp_data)
+                icmp_type, code, chk, rcv_ident, rec_seq = struct.unpack("bbHHh", icmp_data)
                 # Если получен Echo Reply (тип 0) и идентификатор совпадает – успех.
                 if icmp_type == 0 and rcv_ident == self.ident:
                     sock.close()
@@ -173,19 +171,21 @@ class RouteTracer:
     def start_tracing(self, use_dns: bool = False):
         """
         Запускает трассировку маршрута и выводит результаты для каждого хопа.
-        Для каждого TTL выводятся отдельные времена для всех пакетов (по одному на каждый запрос).
+        Для каждого TTL используется один и тот же sequence number для всех пакетов, затем он увеличивается.
 
         :param use_dns: Если True, дополнительно выводится обратное разрешение DNS для полученного IP.
         """
         if use_dns:
-            print(f"Traceroute до {self.target_ip} с разрешением DNS (макс. {self.max_hops} хопов):")
+            print(f"Traceroute до {self.target_ip} с DNS (макс. {self.max_hops} хопов):")
         else:
             print(f"Traceroute до {self.target_ip} (макс. {self.max_hops} хопов):")
 
         for ttl in range(1, self.max_hops + 1):
+            # Увеличиваем sequence number только один раз для группы пакетов с текущим TTL.
+            self.seq += 1
             results = []
             for _ in range(self.probes_per_hop):
-                ip_resp, rtt = self.send_request(ttl)
+                ip_resp, rtt = self.send_request(ttl, self.seq)
                 if ip_resp is None:
                     results.append(("*", None))
                 else:
@@ -208,7 +208,7 @@ class RouteTracer:
 
 def main():
     """
-    запрашивает IP или доменное имя, разрешает его (при необходимости)
+    Основная функция: запрашивает у пользователя IP или доменное имя, разрешает его (при необходимости)
     и запускает трассировку маршрута.
     """
     user_input = input("Введите IP или доменное имя: ").strip()
