@@ -84,12 +84,12 @@ class ICMPHandler:
         """
         # Формат "bbHHh":
         #   b - 1 байт: тип (ECHO_REQ)
-        #   b - 1 байт: код (0)
+        #   b - 1 байт: код (0) уточняет тип сообщения
         #   H - 2 байта: контрольная сумма (пока 0)
         #   H - 2 байта: идентификатор
         #   h - 2 байта: номер последовательности
         header = struct.pack("bbHHh", ICMPHandler.ECHO_REQ, 0, 0, ident, seq)
-        payload = b'bsuirbsuirbsuirbsuirbsuirbsuirpi'
+        payload = b'bsuirbsuirbsuirbsuirbsuirbsuirpi' # позволяет тестировать передачу пакетов разных пакетов
         chksum = ICMPHandler.calc_checksum(header + payload)
         header = struct.pack("bbHHh", ICMPHandler.ECHO_REQ, 0, socket.htons(chksum), ident, seq)
         return header + payload
