@@ -2,7 +2,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const chatWindow = document.getElementById('chatWindow');
     const messageInput = document.getElementById('messageInput');
     const sendButton = document.getElementById('sendButton');
+    const stopServerButton = document.getElementById('stopServerButton');
 
+    // Функция для получения сообщений
     async function fetchMessages() {
         try {
             const response = await fetch('/Chat/GetMessages');
@@ -18,6 +20,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // Функция для отправки сообщений
     async function sendMessage() {
         const message = messageInput.value;
         if (!message) return;
@@ -35,11 +38,39 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // Обработчик для отправки сообщения
     sendButton.addEventListener('click', sendMessage);
     messageInput.addEventListener('keyup', function(e) {
         if (e.key === 'Enter') sendMessage();
     });
 
-    // Каждые 2 секунды запрашиваем новые сообщения
-    setInterval(fetchMessages, 2000);
+    // Запускаем опрос сообщений каждые 2 секунды
+    const messageInterval = setInterval(fetchMessages, 2000);
+
+    // Обработчик для остановки сервера: при успешном завершении отключает ввод и остановку опроса
+    stopServerButton.addEventListener('click', async function() {
+        try {
+            const response = await fetch('/Chat/StopServer', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            const result = await response.json();
+            if (result.success) {
+                // Останавливаем опрос сообщений
+                clearInterval(messageInterval);
+                // Деактивируем кнопки и поле ввода
+                sendButton.disabled = true;
+                messageInput.disabled = true;
+                stopServerButton.disabled = true;
+                alert(result.message);
+            } else {
+                alert("Ошибка при остановке сервера.");
+            }
+        } catch (error) {
+            console.error('Ошибка остановки сервера', error);
+            alert('Ошибка при остановке сервера.');
+        }
+    });
 });

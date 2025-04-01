@@ -71,5 +71,14 @@ namespace MyChatApp.Controllers
             }
             return Ok();
         }
+        
+        [HttpPost]
+        public IActionResult StopServer()
+        {
+            // Тут можно как вызвать асинхронную версию, если вы её реализуете,
+            // или вызвать синхронный метод остановки.
+            _socketService.StopServerAsync();
+            return Json(new { success = true, message = "Сервер остановлен." });
+        }
     }
 }

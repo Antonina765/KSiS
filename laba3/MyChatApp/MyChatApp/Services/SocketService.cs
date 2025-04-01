@@ -114,13 +114,33 @@ public class SocketService
     }
 
     // Остановка сервера и закрытие подключений
-    public void StopServer() 
-    { 
-        IsRunning = false; 
-        _listener.Stop(); 
-        foreach (var client in _clients) 
-        { 
-            client.Close();
+    // Вместо существующего метода StopServer добавляем асинхронную версию
+    public async Task StopServerAsync()
+    {
+        // Устанавливаем флаг завершения работы, чтобы все циклы обработки перестали чтение/приём данных
+        IsRunning = false;
+    
+        // Формируем сообщение об остановке сервера.
+        string shutdownMessage = "[Server] Сервер закрыт! Соединение будет завершено.";
+    
+        // Рассылаем клиентам сообщение об остановке
+        await BroadcastMessageAsync(shutdownMessage);
+    
+        // Останавливаем прием новых подключений
+        _listener.Stop();
+    
+        // Закрываем все соединения с клиентами
+        foreach (var client in _clients)
+        {
+            try
+            {
+                client.Close();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Ошибка закрытия клиента: " + ex.Message);
+            }
         }
     }
+
 }
