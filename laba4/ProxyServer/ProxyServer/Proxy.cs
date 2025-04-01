@@ -13,6 +13,7 @@ namespace proxy
 {
     public class Proxy
     {
+        public static bool IsRunning = true;
         public const int BUFFER = 8192;
         public static IPAddress ipAddress = IPAddress.Any;
         public static int Port = 8888;
@@ -22,20 +23,43 @@ namespace proxy
             TcpListener tcpListener = new TcpListener(ipAddress, Port);
             tcpListener.Start();
             
-            while (true)
+            while (IsRunning)
             {
-                Socket client = tcpListener.AcceptSocket();
-                Thread thread = new Thread(() => Listen(client));
-                thread.Start();
+                try
+                {
+                    Socket client = tcpListener.AcceptSocket();
+                    Thread thread = new Thread(() => Listen(client));
+                    thread.IsBackground = true;
+                    thread.Start();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Ошибка accept: {ex.Message}");
+                }
             }
         }
 
         public static void Listen(Socket client)
         {
-            NetworkStream clientStream = new NetworkStream(client);
-            byte[] httpRequest = Receive(clientStream);
-            Response(clientStream, httpRequest);
-            client.Close();
+            try
+            {
+                using (NetworkStream clientStream = new NetworkStream(client))
+                {
+                    byte[] httpRequest = Receive(clientStream);
+                    if (httpRequest.Length > 0)
+                    {
+                        Response(clientStream, httpRequest);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка в соединении: {ex.Message}");
+            }
+            finally
+            {
+                client.Close();
+            }
         }
 
         public static byte[] Receive(NetworkStream netStream)
@@ -55,34 +79,35 @@ namespace proxy
 
         public static void Response(NetworkStream clientStream, byte[] httpRequest)
         {
-            Socket server = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-
             try
             {
                 string request = Encoding.UTF8.GetString(httpRequest);
                 string host;
                 IPEndPoint ipEnd = GetEndPoint(request, out host);
-                string message = GetRelativePath(request);
-
-                server.Connect(ipEnd);
-                NetworkStream serverStream = new NetworkStream(server);
-
-                byte[] messageBytes = Encoding.UTF8.GetBytes(message);
-                serverStream.Write(messageBytes, 0, messageBytes.Length);
-
-                byte[] httpResponse = Receive(serverStream);
-                clientStream.Write(httpResponse, 0, httpResponse.Length);
-
-                OutputResponse(httpResponse, host);
-                serverStream.CopyTo(clientStream);
+        
+                using (Socket server = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp))
+                {
+                    server.Connect(ipEnd);
+                    using (NetworkStream serverStream = new NetworkStream(server))
+                    {
+                        // Отправляем запрос на целевой сервер
+                        serverStream.Write(httpRequest, 0, httpRequest.Length);
+                
+                        // Получаем ответ
+                        byte[] responseBuffer = new byte[BUFFER];
+                        int bytesRead;
+                        while ((bytesRead = serverStream.Read(responseBuffer, 0, responseBuffer.Length)) > 0)
+                        {
+                            // Пересылаем клиенту
+                            clientStream.Write(responseBuffer, 0, bytesRead);
+                            OutputResponse(responseBuffer, host);
+                        }
+                    }
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                return;
-            }
-            finally
-            {
-                server.Close();
+                Console.WriteLine($"Ошибка обработки запроса: {ex.Message}");
             }
         }
 
