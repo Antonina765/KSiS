@@ -81,47 +81,92 @@ namespace proxy
         { //преобрахование запроса в строку
             try
             {
-                string request = Encoding.UTF8.GetString(httpRequest); //преобразование массива байт полученного от клиента в строку
+                // Считываем исходный запрос от клиента в строку
+                string fullRequest = Encoding.UTF8.GetString(httpRequest);
                 string host;
-                IPEndPoint ipEnd = GetEndPoint(request, out host); // извлекает из запроса заголовок и ип адрес целевого сервера (DNS-разрешение хоста)
-        
+                IPEndPoint ipEnd = GetEndPoint(fullRequest, out host);
+
+                // Если запрос содержит абсолютный URL (например, "GET http://example.com/ HTTP/1.1"),
+                // преобразуем его в относительный ("GET / HTTP/1.1")
+                string fixedRequest = fullRequest;
+                if (fullRequest.StartsWith("GET http", StringComparison.OrdinalIgnoreCase) ||
+                    fullRequest.StartsWith("POST http", StringComparison.OrdinalIgnoreCase))
+                {
+                    fixedRequest = GetRelativePath(fullRequest);
+                }
+                byte[] fixedRequestBytes = Encoding.UTF8.GetBytes(fixedRequest);
+
+                // Соединяемся с сервером
                 using (Socket server = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp))
-                { //установка соединенияя с целевым сервером (новый сокет с параметрами) и происходит подклбчение
+                {
                     server.Connect(ipEnd);
                     using (NetworkStream serverStream = new NetworkStream(server))
-                    { //новое соединение с сервером
-                        // исходный HTTP-запрос (как массив байтов) отправляется на целевой сервер
-                        serverStream.Write(httpRequest, 0, httpRequest.Length);
-                
+                    {
+                        // Отправляем исправленный HTTP-запрос удалённому серверу
+                        serverStream.Write(fixedRequestBytes, 0, fixedRequestBytes.Length);
+                        serverStream.Flush();
+                        
                         // Получаем ответ
                         byte[] responseBuffer = new byte[BUFFER];
                         int bytesRead;
-                        bool headerLogged = false;
+                        bool headerParsed = false;
+                        string statusLine = "";
+                        bool logEveryChunk = false;
+
+                        // Аккумулятор для накопления байт заголовка (на случай, если заголовок придёт порциями)
+                        List<byte> headerAccumulator = new List<byte>();
+
                         while ((bytesRead = serverStream.Read(responseBuffer, 0, responseBuffer.Length)) > 0)
                         {
-                            // каждая порция данных сразу же пересылаем клиенту
+                            // Пересылаем полученные данные клиенту сразу
                             clientStream.Write(responseBuffer, 0, bytesRead);
-                            //логируем только заголовок ответа (один раз)
-                            if (!headerLogged)
-                            {
-                                try
-                                {
-                                    // Попытка декодировать только первую порцию данных как текст
-                                    string responseText = Encoding.UTF8.GetString(responseBuffer, 0, bytesRead);
-                                    int headerEnd = responseText.IndexOf("\r\n\r\n");
-                                    string headerSection = headerEnd > 0
-                                        ? responseText.Substring(0, headerEnd)
-                                        : responseText;
+                            clientStream.Flush();
 
-                                    // Берём первую строку заголовка (например: "HTTP/1.1 200 OK")
-                                    string firstLine = headerSection.Split(new string[] { "\r\n" }, StringSplitOptions.None)[0];
-                                    Console.WriteLine($"{DateTime.Now} {host} {firstLine}");
-                                    headerLogged = true;
-                                }
-                                catch (Exception ex)
+                            if (!headerParsed)
+                            {
+                                // Накопление байт заголовка
+                                for (int i = 0; i < bytesRead; i++)
                                 {
-                                    Console.WriteLine("Ошибка при разборе заголовка: " + ex.Message);
+                                    headerAccumulator.Add(responseBuffer[i]);
                                 }
+
+                                // Пробуем декодировать накопленные байты как строку
+                                string headerText = Encoding.UTF8.GetString(headerAccumulator.ToArray());
+                                int headerEnd = headerText.IndexOf("\r\n\r\n");
+                                if (headerEnd != -1)
+                                {
+                                    // Заголовок получен полностью
+                                    string headerSection = headerText.Substring(0, headerEnd);
+                                    string[] headerLines = headerSection.Split(new string[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
+                                    if (headerLines.Length > 0)
+                                    {
+                                        statusLine = headerLines[0];
+                                    }
+                                    headerParsed = true;
+
+                                    // Если в заголовке указан тип контента с аудио, будем логировать каждый чанк
+                                    if (headerText.ToLower().Contains("content-type:") &&
+                                        headerText.ToLower().Contains("audio"))
+                                    {
+                                        logEveryChunk = true;
+                                    }
+                                    Console.WriteLine($"{DateTime.Now} {host} {statusLine}");
+                                }
+                                else
+                                {
+                                    // Если заголовок ещё не полностью получен — выводим промежуточную информацию
+                                    Console.WriteLine($"{DateTime.Now} {host} — получаю заголовок, прочитано {headerAccumulator.Count} байт");
+                                }
+                            }
+                            else
+                            {
+                                // Если заголовок уже разобран
+                                if (logEveryChunk)
+                                {
+                                    // Для аудио­потока выводим статус на каждый чанк
+                                    Console.WriteLine($"{DateTime.Now} {host} {statusLine}");
+                                }
+                                // Для остальных ответов дополнительное логирование не производится
                             }
                         }
                     }
@@ -133,13 +178,19 @@ namespace proxy
             }
         }
 
+        // Метод для извлечения относительного пути из запроса с абсолютным URL
         public static string GetRelativePath(string message)
         {
-            Regex regex = new Regex(@"http:\/\/[a-z0-9а-я\.\:]*");
+            // Регулярка ищет подстроку вида "http://example.com"
+            Regex regex = new Regex(@"http:\/\/[a-z0-9а-я\.\:]*", RegexOptions.IgnoreCase);
             Match match = regex.Match(message);
-            string host = match.Value;
-            message = message.Replace(host, "");
-            
+            if (match.Success)
+            {
+                string absoluteHost = match.Value;
+                // Заменяем абсолютный URL на пустую строку,
+                // оставляя только относительный путь в запросе
+                message = message.Replace(absoluteHost, "");
+            }
             return message;
         }
 
