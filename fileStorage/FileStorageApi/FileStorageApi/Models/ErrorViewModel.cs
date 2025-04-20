@@ -1,4 +1,4 @@
-namespace FileStorage.Models;
+namespace FileStorageApi.Models;
 
 public class ErrorViewModel
 {

@@ -1,0 +1,148 @@
+﻿@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8" />
+    <title>Файловое хранилище</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { margin-bottom: 30px; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
+        label { display: inline-block; width: 200px; }
+        input[type="text"] { width: 300px; }
+        textarea { width: 300px; height: 150px; }
+        button { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Управление файловым хранилищем</h1>
+
+    <div class="container">
+        <h2>Загрузка файла</h2>
+        <label>Путь (относительно /storage):</label>
+        <input type="text" id="uploadPath" placeholder="path/to/file.txt" /><br /><br />
+        <label>Выберите файл:</label>
+        <input type="file" id="fileInput" /><br /><br />
+        <button onclick="uploadFile()">Загрузить файл</button>
+        <div id="uploadResult"></div>
+    </div>
+
+    <div class="container">
+        <h2>Получение файла или каталога</h2>
+        <label>Путь:</label>
+        <input type="text" id="getPath" placeholder="path/to/file.txt или path/to/" /><br /><br />
+        <button onclick="getFileOrDirectory()">Получить</button>
+        <div id="getResult"></div>
+    </div>
+
+    <div class="container">
+        <h2>Информация о файле (HEAD)</h2>
+        <label>Путь:</label>
+        <input type="text" id="headPath" placeholder="path/to/file.txt" /><br /><br />
+        <button onclick="getMetadata()">Получить информацию</button>
+        <div id="headResult"></div>
+    </div>
+
+    <div class="container">
+        <h2>Удаление файла/каталога</h2>
+        <label>Путь:</label>
+        <input type="text" id="deletePath" placeholder="path/to/file.txt или path/to/directory" /><br /><br />
+        <button onclick="deleteFileOrDirectory()">Удалить</button>
+        <div id="deleteResult"></div>
+    </div>
+
+    <script>
+        // Базовый URL для API (префикс "storage" используется в FileStorageController)
+        const baseUrl = '/storage/';
+
+        async function uploadFile() {
+            const path = document.getElementById('uploadPath').value;
+            const fileInput = document.getElementById('fileInput');
+            const resultDiv = document.getElementById('uploadResult');
+
+            if (!fileInput.files.length) {
+                resultDiv.innerHTML = 'Пожалуйста, выберите файл.';
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const url = baseUrl + encodeURIComponent(path);
+            try {
+                const response = await fetch(url, {
+                    method: 'PUT',
+                    body: file
+                });
+                if (response.ok) {
+                    const text = await response.text();
+                    resultDiv.innerHTML = 'Успех: ' + text;
+                } else {
+                    resultDiv.innerHTML = 'Ошибка при загрузке файла: ' + response.status;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = 'Ошибка: ' + error;
+            }
+        }
+
+        async function getFileOrDirectory() {
+            const path = document.getElementById('getPath').value;
+            const resultDiv = document.getElementById('getResult');
+            const url = baseUrl + encodeURIComponent(path);
+            try {
+                const response = await fetch(url, { method: 'GET' });
+                if (response.ok) {
+                    const contentType = response.headers.get('Content-Type');
+                    if (contentType && contentType.indexOf('application/json') !== -1) {
+                        const jsonData = await response.json();
+                        resultDiv.innerHTML = '<pre>' + JSON.stringify(jsonData, null, 2) + '</pre>';
+                    } else {
+                        // Если возвращен файл, создаем ссылку для скачивания
+                        const blob = await response.blob();
+                        const downloadUrl = URL.createObjectURL(blob);
+                        resultDiv.innerHTML = `<a href="${downloadUrl}" download>Скачать файл</a>`;
+                    }
+                } else {
+                    resultDiv.innerHTML = 'Ошибка: ' + response.status;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = 'Ошибка: ' + error;
+            }
+        }
+
+        async function getMetadata() {
+            const path = document.getElementById('headPath').value;
+            const resultDiv = document.getElementById('headResult');
+            const url = baseUrl + encodeURIComponent(path);
+            try {
+                const response = await fetch(url, { method: 'HEAD' });
+                if (response.ok) {
+                    const size = response.headers.get('X-File-Size');
+                    const modified = response.headers.get('X-Last-Modified');
+                    resultDiv.innerHTML = 'Размер файла: ' + size + ' байт<br>Дата последнего изменения: ' + modified;
+                } else {
+                    resultDiv.innerHTML = 'Ошибка: ' + response.status;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = 'Ошибка: ' + error;
+            }
+        }
+
+        async function deleteFileOrDirectory() {
+            const path = document.getElementById('deletePath').value;
+            const resultDiv = document.getElementById('deleteResult');
+            const url = baseUrl + encodeURIComponent(path);
+            try {
+                const response = await fetch(url, { method: 'DELETE' });
+                if (response.status === 204) {
+                    resultDiv.innerHTML = 'Объект успешно удалён.';
+                } else {
+                    const text = await response.text();
+                    resultDiv.innerHTML = 'Ошибка: ' + response.status + ' - ' + text;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = 'Ошибка: ' + error;
+            }
+        }
+    </script>
+</body>
+</html>
