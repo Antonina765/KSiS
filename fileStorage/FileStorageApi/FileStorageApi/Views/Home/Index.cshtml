@@ -37,6 +37,26 @@
     </div>
 
     <div class="container">
+        <h2>Вывод всех файлов</h2>
+        <button onclick="getAllFiles()">Показать все файлы</button>
+        <div id="allFilesResult"></div>
+    </div>
+
+    <div class="container">
+        <h2>Редактирование файла</h2>
+        <label>Путь:</label>
+        <input type="text" id="editPath" placeholder="path/to/file.txt" /><br /><br />
+        <label>Новое имя файла:</label>
+        <input type="text" id="newFileName" placeholder="newname.txt" /><br /><br />
+        <button onclick="renameFile()">Переименовать файл</button><br /><br />
+
+        <label>Новое содержимое файла:</label>
+        <textarea id="fileContent"></textarea><br /><br />
+        <button onclick="editFile()">Изменить содержимое</button>
+        <div id="editResult"></div>
+    </div>
+
+    <div class="container">
         <h2>Информация о файле (HEAD)</h2>
         <label>Путь:</label>
         <input type="text" id="headPath" placeholder="path/to/file.txt" /><br /><br />
@@ -52,7 +72,7 @@
         <div id="deleteResult"></div>
     </div>
 
-    <script>
+<script>
         // Базовый URL для API (префикс "storage" используется в FileStorageController)
         const baseUrl = '/storage/';
 
@@ -138,6 +158,65 @@
                 } else {
                     const text = await response.text();
                     resultDiv.innerHTML = 'Ошибка: ' + response.status + ' - ' + text;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = 'Ошибка: ' + error;
+            }
+        }
+
+        async function getAllFiles() {
+            const resultDiv = document.getElementById('allFilesResult');
+            try {
+                const response = await fetch(baseUrl + 'all', { method: 'GET' });
+                if (response.ok) {
+                    const files = await response.json();
+                    resultDiv.innerHTML = '<pre>' + JSON.stringify(files, null, 2) + '</pre>';
+                } else {
+                    resultDiv.innerHTML = 'Ошибка: ' + response.status;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = 'Ошибка: ' + error;
+            }
+        }
+
+        async function renameFile() {
+            const path = document.getElementById('editPath').value;
+            const newName = document.getElementById('newFileName').value;
+            const resultDiv = document.getElementById('editResult');
+
+            try {
+                const response = await fetch(baseUrl + 'rename?filePath=' + encodeURIComponent(path), {
+                    method: 'PATCH',
+                    body: JSON.stringify({ NewName: newName }),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                if (response.ok) {
+                    const text = await response.text();
+                    resultDiv.innerHTML = 'Успех: ' + text;
+                } else {
+                    const responseText = await response.text();
+                    resultDiv.innerHTML = 'Ошибка: ' + response.status + '-' + responseText;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = 'Ошибка: ' + error;
+            }
+        }
+
+        async function editFile() {
+            const path = document.getElementById('editPath').value;
+            const content = document.getElementById('fileContent').value;
+            const resultDiv = document.getElementById('editResult');
+
+            try {
+                const response = await fetch(baseUrl + 'edit?filePath=' + encodeURIComponent(path), {
+                    method: 'POST',
+                    body: content
+                });
+                if (response.ok) {
+                    const text = await response.text();
+                    resultDiv.innerHTML = 'Успех: ' + text;
+                } else {
+                    resultDiv.innerHTML = 'Ошибка: ' + response.status;
                 }
             } catch (error) {
                 resultDiv.innerHTML = 'Ошибка: ' + error;
