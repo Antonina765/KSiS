@@ -191,48 +191,5 @@ namespace FileStorageApi.Controllers
                 return StatusCode(500, $"Ошибка при удалении: {ex.Message}");
             }
         }
-        
-        [HttpPatch("rename")]
-        public IActionResult RenameFile([FromQuery] string filePath, [FromBody] RenameRequest request)
-        {
-            if (string.IsNullOrWhiteSpace(filePath) || request == null || string.IsNullOrWhiteSpace(request.NewName))
-            {
-                return BadRequest("Путь или новое имя не указаны.");
-            }
-
-            string fullPath = GetSafePath(filePath);
-            if (System.IO.File.Exists(fullPath))
-            {
-                string newPath = Path.Combine(Path.GetDirectoryName(fullPath), request.NewName);
-                try
-                {
-                    System.IO.File.Move(fullPath, newPath);
-                    return Ok("Файл успешно переименован.");
-                }
-                catch (Exception ex)
-                {
-                    return StatusCode(500, $"Ошибка при переименовании: {ex.Message}");
-                }
-            }
-            return NotFound("Файл не найден.");
-        }
-
-        [HttpPost("edit")]
-        public async Task<IActionResult> EditFile([FromQuery] string filePath)
-        {
-            string fullPath = GetSafePath(filePath);
-
-            if (!System.IO.File.Exists(fullPath))
-            {
-                return NotFound("Файл не найден.");
-            }
-
-            using (var fs = new FileStream(fullPath, FileMode.Truncate, FileAccess.Write))
-            {
-                await Request.Body.CopyToAsync(fs);
-            }
-
-            return Ok("Содержимое файла успешно изменено.");
-        }
     }
 }
